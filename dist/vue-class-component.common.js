@@ -11,6 +11,32 @@ function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'defau
 
 var Vue = _interopDefault(require('vue'));
 
+function reflectionIsSupported() {
+    return (Reflect && Reflect.defineMetadata) !== undefined;
+}
+function copyReflectionMetadata(from, to, reflectionMap) {
+    shallowCopy(from.prototype, to.prototype, reflectionMap.instance);
+    shallowCopy(from, to, reflectionMap.static);
+    shallowCopy(from, to, { 'constructor': reflectionMap.constructor });
+}
+function shallowCopy(from, to, propertyKeys) {
+    var _loop_1 = function (propertyKey) {
+        propertyKeys[propertyKey].forEach(function (metadataKey) {
+            if (propertyKey == 'constructor') {
+                var metadata = Reflect.getOwnMetadata(metadataKey, from);
+                Reflect.defineMetadata(metadataKey, metadata, to);
+            }
+            else {
+                var metadata = Reflect.getOwnMetadata(metadataKey, from, propertyKey);
+                Reflect.defineMetadata(metadataKey, metadata, to, propertyKey);
+            }
+        });
+    };
+    for (var propertyKey in propertyKeys) {
+        _loop_1(propertyKey);
+    }
+}
+
 var hasProto = { __proto__: [] } instanceof Array;
 function createDecorator(factory) {
     return function (target, key, index) {
@@ -105,12 +131,23 @@ var $internalHooks = [
 ];
 function componentFactory(Component, options) {
     if (options === void 0) { options = {}; }
+    var reflectionMap = {
+        instance: {},
+        static: {},
+        constructor: []
+    };
+    if (reflectionIsSupported()) {
+        reflectionMap.constructor = Reflect.getOwnMetadataKeys(Component);
+    }
     options.name = options.name || Component._componentTag || Component.name;
     // prototype props.
     var proto = Component.prototype;
     Object.getOwnPropertyNames(proto).forEach(function (key) {
         if (key === 'constructor') {
             return;
+        }
+        if (reflectionIsSupported()) {
+            reflectionMap.instance[key] = Reflect.getOwnMetadataKeys(proto, key);
         }
         // hooks
         if ($internalHooks.indexOf(key) > -1) {
@@ -147,7 +184,10 @@ function componentFactory(Component, options) {
         ? superProto.constructor
         : Vue;
     var Extended = Super.extend(options);
-    forwardStaticMembers(Extended, Component, Super);
+    forwardStaticMembersAndCollectReflection(Extended, Component, Super, reflectionMap);
+    if (reflectionIsSupported()) {
+        copyReflectionMetadata(Component, Extended, reflectionMap);
+    }
     return Extended;
 }
 var reservedPropertyNames = [
@@ -165,12 +205,15 @@ var reservedPropertyNames = [
     'directive',
     'filter'
 ];
-function forwardStaticMembers(Extended, Original, Super) {
+function forwardStaticMembersAndCollectReflection(Extended, Original, Super, reflectionMap) {
     // We have to use getOwnPropertyNames since Babel registers methods as non-enumerable
     Object.getOwnPropertyNames(Original).forEach(function (key) {
         // `prototype` should not be overwritten
         if (key === 'prototype') {
             return;
+        }
+        if (reflectionIsSupported()) {
+            reflectionMap.static[key] = Reflect.getOwnMetadataKeys(Original, key);
         }
         // Some browsers does not allow reconfigure built-in properties
         var extendedDescriptor = Object.getOwnPropertyDescriptor(Extended, key);
